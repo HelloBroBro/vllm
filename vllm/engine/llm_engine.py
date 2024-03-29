@@ -553,13 +553,10 @@ class LLMEngine:
         # Update the scheduled sequence groups with the model outputs.
         scheduled_seq_groups = scheduler_outputs.scheduled_seq_groups
 
-        # If prefix caching is enabled, mark all blocks in the sequence groups
-        # as completed so that future requests don't attempt to recompute them
-        if self.cache_config.enable_prefix_caching:
-            for seq_group in scheduled_seq_groups:
-                self.scheduler.mark_blocks_as_computed(seq_group)
-
-        for seq_group, outputs in zip(scheduled_seq_groups, output):
+        for scheduled_seq_group, outputs in zip(scheduled_seq_groups, output):
+            seq_group = scheduled_seq_group.seq_group
+            token_chunk_size = scheduled_seq_group.token_chunk_size
+            seq_group.update_num_computed_tokens(token_chunk_size)
             self._process_sequence_group_outputs(seq_group, outputs)
 
         # Free the finished sequence groups.
@@ -567,7 +564,8 @@ class LLMEngine:
 
         # Create the outputs.
         request_outputs: List[RequestOutput] = []
-        for seq_group in scheduled_seq_groups:
+        for scheduled_seq_group in scheduled_seq_groups:
+            seq_group = scheduled_seq_group.seq_group
             seq_group.maybe_set_first_token_time(now)
             request_output = RequestOutput.from_seq_group(seq_group)
             request_outputs.append(request_output)
@@ -682,17 +680,20 @@ class LLMEngine:
             # Number of Tokens.
             if prompt_run:
                 num_prompt_tokens = sum(
-                    len(seq_group.prompt_token_ids)
-                    for seq_group in scheduler_outputs.scheduled_seq_groups)
+                    len(scheduled_seq_group.seq_group.prompt_token_ids)
+                    for scheduled_seq_group in
+                    scheduler_outputs.scheduled_seq_groups)
                 num_generation_tokens = sum(
-                    seq_group.num_seqs()
-                    for seq_group in scheduler_outputs.scheduled_seq_groups)
+                    scheduled_seq_group.seq_group.num_seqs()
+                    for scheduled_seq_group in
+                    scheduler_outputs.scheduled_seq_groups)
             else:
                 num_generation_tokens = scheduler_outputs.num_batched_tokens
 
             # Latency Timings.
             time_last_iters = []
-            for seq_group in scheduler_outputs.scheduled_seq_groups:
+            for scheduled_seq_group in scheduler_outputs.scheduled_seq_groups:
+                seq_group = scheduled_seq_group.seq_group
                 # Time since last token.
                 # (n.b. updates seq_group.metrics.last_token_time)
                 time_last_iters.append(seq_group.get_last_latency(now))
