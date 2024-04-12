@@ -294,7 +294,7 @@ def create_kv_caches_with_random(
     head_size: int,
     cache_dtype: Optional[Union[str, torch.dtype]],
     model_dtype: Optional[Union[str, torch.dtype]] = None,
-    seed: Optional[int] = 0,
+    seed: int = 0,
     device: Optional[str] = "cuda",
 ) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
     torch.random.manual_seed(seed)
@@ -372,7 +372,6 @@ def is_pin_memory_available() -> bool:
         print_warning_once("Pin memory is not supported on Neuron.")
         return False
     elif is_cpu():
-        print_warning_once("Pin memory is not supported on CPU.")
         return False
     return True
 
@@ -401,7 +400,7 @@ class CudaMemoryProfiler:
         gc.collect()
 
 
-def str_to_int_tuple(s: str) -> Tuple[int]:
+def str_to_int_tuple(s: str) -> Tuple[int, ...]:
     """Convert a string to a tuple of integers."""
     try:
         return tuple(map(int, s.split(",")))
