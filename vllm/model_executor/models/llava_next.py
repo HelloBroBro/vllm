@@ -37,6 +37,9 @@ _KEYS_TO_MODIFY_MAPPING = {
     "language_model.model": "language_model",
 }
 
+# Result in the max possible feature size (2x2 grid of 336x336px tiles)
+MAX_IMAGE_FEATURE_SIZE_HEIGHT = MAX_IMAGE_FEATURE_SIZE_WIDTH = 448
+
 
 class LlavaNextImagePixelInputs(TypedDict):
     type: Literal["pixel_values"]
@@ -127,17 +130,20 @@ def get_llava_next_image_feature_size(
     raise NotImplementedError(msg)
 
 
+def get_max_llava_next_image_tokens(ctx: InputContext):
+
+    return get_llava_next_image_feature_size(
+        ctx.get_hf_config(LlavaNextConfig),
+        input_height=MAX_IMAGE_FEATURE_SIZE_HEIGHT,
+        input_width=MAX_IMAGE_FEATURE_SIZE_WIDTH,
+    )
+
+
 def dummy_data_for_llava_next(ctx: InputContext, seq_len: int):
     hf_config = ctx.get_hf_config(LlavaNextConfig)
     vision_config = hf_config.vision_config
 
-    # Result in the max possible feature size (2x2 grid of 336x336px tiles)
-    dummy_height = dummy_width = 448
-    image_feature_size = get_llava_next_image_feature_size(
-        hf_config,
-        input_height=dummy_height,
-        input_width=dummy_width,
-    )
+    image_feature_size = get_max_llava_next_image_tokens(ctx)
 
     if isinstance(vision_config, CLIPVisionConfig):
         seq_data = dummy_seq_data_for_clip(
@@ -149,8 +155,8 @@ def dummy_data_for_llava_next(ctx: InputContext, seq_len: int):
 
         mm_data = dummy_image_for_clip(
             vision_config,
-            image_width_override=dummy_width,
-            image_height_override=dummy_height,
+            image_width_override=MAX_IMAGE_FEATURE_SIZE_WIDTH,
+            image_height_override=MAX_IMAGE_FEATURE_SIZE_HEIGHT,
         )
 
         return seq_data, mm_data
@@ -198,6 +204,7 @@ def input_processor_for_llava_next(ctx: InputContext, llm_inputs: LLMInputs):
 
 
 @MULTIMODAL_REGISTRY.register_image_input_mapper()
+@MULTIMODAL_REGISTRY.register_max_image_tokens(get_max_llava_next_image_tokens)
 @INPUT_REGISTRY.register_dummy_data(dummy_data_for_llava_next)
 @INPUT_REGISTRY.register_input_processor(input_processor_for_llava_next)
 class LlavaNextForConditionalGeneration(nn.Module, SupportsVision):
