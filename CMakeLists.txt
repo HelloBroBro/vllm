@@ -192,6 +192,10 @@ set(VLLM_EXT_SRC
 
 if(VLLM_GPU_LANG STREQUAL "CUDA")
   SET(CUTLASS_ENABLE_HEADERS_ONLY ON CACHE BOOL "Enable only the header library")
+
+  # Set CUTLASS_REVISION manually -- its revision detection doesn't work in this case.
+  set(CUTLASS_REVISION "v3.5.1" CACHE STRING "CUTLASS revision to use")
+
   FetchContent_Declare(
         cutlass
         GIT_REPOSITORY https://github.com/nvidia/cutlass.git
@@ -381,6 +385,9 @@ endif()
 
 # Set the parent build flag so that the vllm-flash-attn library does not redo compile flag and arch initialization.
 set(VLLM_PARENT_BUILD ON)
+
+# Ensure the vllm/vllm_flash_attn directory exists before installation
+install(CODE "file(MAKE_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/vllm/vllm_flash_attn\")" COMPONENT vllm_flash_attn_c)
 
 # Make sure vllm-flash-attn install rules are nested under vllm/
 install(CODE "set(CMAKE_INSTALL_LOCAL_ONLY FALSE)" COMPONENT vllm_flash_attn_c)
