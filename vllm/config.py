@@ -4,8 +4,9 @@ import json
 import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Dict, Final, List,
-                    Literal, Mapping, Optional, Set, Tuple, Type, Union)
+from typing import (TYPE_CHECKING, Any, Callable, ClassVar, Counter, Dict,
+                    Final, List, Literal, Mapping, Optional, Set, Tuple, Type,
+                    Union)
 
 import torch
 from pydantic import BaseModel, Field, PrivateAttr
@@ -22,7 +23,7 @@ from vllm.transformers_utils.config import (
     get_hf_text_config, get_pooling_config,
     get_sentence_transformer_tokenizer_config, is_encoder_decoder, uses_mrope)
 from vllm.utils import (GiB_bytes, cuda_device_count_stateless, get_cpu_memory,
-                        identity, print_warning_once)
+                        identity, print_warning_once, resolve_obj_by_qualname)
 
 if TYPE_CHECKING:
     from ray.util.placement_group import PlacementGroup
@@ -2072,6 +2073,13 @@ class CompilationConfig(BaseModel):
             - 1: dynamo as is.
             - 2: dynamo once.
             - 3: piecewise compilation.
+        - backend: the backend for compilation. It needs to be a string.
+            - "" (empty string): use the default backend.
+            - "eager"/"openxla"/...: use the specified backend registered in PyTorch.
+            - "full.module.name": a qualified name which can be used to import the backend function.
+            We use string to avoid serialization issues when using compilation in a distributed setting.
+            When the compilation level is 1 or 2, the backend is used for the compilation directly (it sees the whole graph).
+            When the compilation level is 3, the backend is used for the piecewise compilation (it sees a part of the graph).
         - custom_ops: fine-grained control over which custom ops to enable/disable.
             Use 'all' to enable all, 'none' to disable all.
             Also specify a list of custom op names to enable (prefixed with a '+'),
@@ -2139,6 +2147,7 @@ class CompilationConfig(BaseModel):
         certain small batchsizes, where inductor is good at optimizing.
     """ # noqa
     level: int = 0
+    backend: str = ""
     custom_ops: List[str] = Field(default_factory=list)
 
     use_inductor: bool = True
@@ -2161,6 +2170,10 @@ class CompilationConfig(BaseModel):
     compile_sizes: List[int] = PrivateAttr
     capture_sizes: List[int] = PrivateAttr
 
+    # keep track of enabled and disabled custom ops
+    enabled_custom_ops: Counter[str] = PrivateAttr
+    disabled_custom_ops: Counter[str] = PrivateAttr
+
     def model_post_init(self, __context: Any) -> None:
         self.level = envs.VLLM_TORCH_COMPILE_LEVEL
 
@@ -2181,6 +2194,30 @@ class CompilationConfig(BaseModel):
             func_name = names[-1]
             func = __import__(module).__dict__[func_name]
             self.inductor_compile_config[k] = func
+
+        self.enabled_custom_ops = Counter()
+        self.disabled_custom_ops = Counter()
+
+    def init_backend(self) -> Union[str, Callable]:
+        if self.level == CompilationLevel.NO_COMPILATION:
+            raise ValueError("No compilation level is set.")
+
+        from torch._dynamo.backends.registry import list_backends
+        torch_backends = list_backends(exclude_tags=tuple())
+        if self.level in [
+                CompilationLevel.DYNAMO_AS_IS, CompilationLevel.DYNAMO_ONCE
+        ]:
+            if self.backend == "":
+                return "eager"
+            if self.backend in torch_backends:
+                return self.backend
+            return resolve_obj_by_qualname(self.backend)
+
+        # TODO: pass user-specified backend to piecewise compilation
+        # merge with the config use_inductor
+        assert self.level == CompilationLevel.PIECEWISE
+        from vllm.compilation.backends import VllmBackend
+        return VllmBackend(self)
 
     def init_during_runtime(self):
         """To complete the initialization of config,

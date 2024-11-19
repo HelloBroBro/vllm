@@ -17,6 +17,7 @@ from transformers.models.pixtral.modeling_pixtral import (
 
 from vllm.attention import AttentionMetadata
 from vllm.config import ModelConfig, VllmConfig
+from vllm.distributed import divide, get_tensor_model_parallel_world_size
 from vllm.inputs import (INPUT_REGISTRY, DecoderOnlyInputs, DummyData,
                          InputContext, token_inputs)
 from vllm.model_executor.layers.activation import get_act_and_mul_fn
@@ -30,6 +31,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.models.utils import merge_multimodal_embeddings
 from vllm.model_executor.sampling_metadata import SamplingMetadata
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalKwargs
+from vllm.multimodal.inputs import PlaceholderRange
 from vllm.multimodal.utils import (cached_get_tokenizer,
                                    consecutive_placeholder_ranges)
 from vllm.sequence import IntermediateTensors, SequenceData
@@ -773,15 +775,28 @@ def input_processor_for_pixtral_hf(
         replace_tokens[-1] = image_end_id
         replace_tokens_list.append(replace_tokens)
 
+    reverse_offsets: List[int] = []
     # Backward iteration for replacement without affecting known indices
     for placeholder_idx, replace_tokens in zip(reversed(placeholder_indices),
                                                reversed(replace_tokens_list)):
+        reverse_offsets.append(
+            len(new_token_ids) - placeholder_idx + len(replace_tokens))
         new_token_ids[placeholder_idx:placeholder_idx + 1] = replace_tokens
+
+    placeholder_ranges: List[PlaceholderRange] = []
+    for reverse_offset, replace_tokens in zip(reversed(reverse_offsets),
+                                              replace_tokens_list):
+        placeholder_ranges.append(
+            PlaceholderRange(
+                offset=len(new_token_ids) - reverse_offset,
+                length=len(replace_tokens),
+            ))
 
     # NOTE: Create a defensive copy of the original inputs
     return token_inputs(prompt_token_ids=new_token_ids,
                         prompt=new_prompt,
-                        multi_modal_data=multi_modal_data)
+                        multi_modal_data=multi_modal_data,
+                        multi_modal_placeholders={"image": placeholder_ranges})
 
 
 class PixtralHFMLP(nn.Module):
@@ -829,17 +844,20 @@ class PixtralHFAttention(nn.Module):
 
         self.config = config
         assert not config.hidden_size % config.num_attention_heads
-        self.n_heads = config.num_attention_heads
+        self.total_num_heads = config.num_attention_heads
+        tp_size = get_tensor_model_parallel_world_size()
+        self.n_heads = divide(config.num_attention_heads, tp_size)
         self.head_dim = config.hidden_size // config.num_attention_heads
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size=config.hidden_size,
             head_size=self.head_dim,
-            total_num_heads=self.n_heads,
+            total_num_heads=self.total_num_heads,
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.qkv_proj",
         )
+        assert self.total_num_heads * self.head_dim == config.hidden_size
         self.o_proj = RowParallelLinear(
             input_size=config.hidden_size,
             output_size=config.hidden_size,
