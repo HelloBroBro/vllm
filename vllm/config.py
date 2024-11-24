@@ -387,7 +387,7 @@ class ModelConfig:
         supported_quantization = QUANTIZATION_METHODS
         rocm_supported_quantization = [
             "awq", "gptq", "fp8", "compressed_tensors", "compressed-tensors",
-            "fbgemm_fp8"
+            "fbgemm_fp8", "gguf"
         ]
         optimized_quantization_methods = [
             "fp8", "marlin", "modelopt", "gptq_marlin_24", "gptq_marlin",
@@ -1133,9 +1133,9 @@ class SchedulerConfig:
                     # max_num_batched_tokens.
                     self.max_num_batched_tokens = max(self.max_model_len, 2048)
                 else:
-                    # It is the values that have the best balance between ITL
-                    # and TTFT on A100. Note it is not optimized for throughput.
-                    self.max_num_batched_tokens = 512
+                    # This value is chosen to have a balance between ITL
+                    # and TTFT. Note it is not optimized for throughput.
+                    self.max_num_batched_tokens = 2048
             else:
                 # If max_model_len is too short, use 2048 as the default value
                 # for higher throughput.
